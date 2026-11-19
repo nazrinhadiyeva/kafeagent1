@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="az">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kafe Sifariş Agenti</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: chat column (dialog + agent loop trace) beside an inspector (memory / system prompt / tools); stacks on phones */
+:root {
+  --bg: #F2F4F1;
+  --surface: #FFFFFF;
+  --surface-2: #E9EEEA;
+  --ink: #1B211E;
+  --muted: #5A655F;
+  --line: #D6DDD8;
+  --accent: #1E6A50;
+  --accent-ink: #FFFFFF;
+  --user-bg: #1E6A50;
+  --user-ink: #FFFFFF;
+  --tool-bg: #FAF3E2;
+  --tool-line: #E5D2A5;
+  --tool-ink: #74500F;
+  --guard-bg: #FBE8E5;
+  --guard-ink: #982B1E;
+  --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1311; --surface: #161B18; --surface-2: #1E2521; --ink: #E4EAE6; --muted: #96A39C; --line: #2A332E;
+    --accent: #5BC198; --accent-ink: #0B1712; --user-bg: #23614B; --user-ink: #F2FAF6;
+    --tool-bg: #221D13; --tool-line: #4A3D21; --tool-ink: #E4BD72; --guard-bg: #3A1C18; --guard-ink: #F2A397;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1311; --surface: #161B18; --surface-2: #1E2521; --ink: #E4EAE6; --muted: #96A39C; --line: #2A332E;
+  --accent: #5BC198; --accent-ink: #0B1712; --user-bg: #23614B; --user-ink: #F2FAF6;
+  --tool-bg: #221D13; --tool-line: #4A3D21; --tool-ink: #E4BD72; --guard-bg: #3A1C18; --guard-ink: #F2A397;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+  padding-block: 20px 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 20px; }
+h1 { margin: 0; font-size: clamp(22px, 3vw, 28px); letter-spacing: -0.02em; text-wrap: balance; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+button { font: inherit; cursor: pointer; }
+.btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 13px; }
+.btn-ghost:hover { border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+.chat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-direction: column; height: min(80vh, 780px); min-height: 480px; min-width: 0; }
+.log { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 86%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--user-bg); color: var(--user-ink); border-bottom-right-radius: 4px; }
+.msg.agent { align-self: flex-start; background: var(--surface-2); border-bottom-left-radius: 4px; font-variant-numeric: tabular-nums; }
+.msg.agent .who, .msg.user .who { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.7; margin-bottom: 2px; }
+
+.trace { align-self: stretch; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 10px; font-family: var(--font-mono); font-size: 12.5px; display: grid; gap: 5px; color: var(--muted); min-width: 0; }
+.trace[hidden] { display: none !important; }
+.trace .t-title { font-family: var(--font-ui); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.trace .line { overflow-wrap: anywhere; }
+.trace .step { color: var(--ink); }
+.trace .tool { background: var(--tool-bg); border: 1px solid var(--tool-line); color: var(--tool-ink); border-radius: 8px; padding: 6px 8px; display: grid; gap: 3px; }
+.trace .tool b { font-weight: 500; }
+.trace .guard { background: var(--guard-bg); color: var(--guard-ink); border-radius: 8px; padding: 6px 8px; }
+.trace details summary { cursor: pointer; color: var(--tool-ink); }
+.trace pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 11.5px; }
+
+.composer { border-top: 1px solid var(--line); padding: 12px; display: grid; gap: 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.off { border-style: dashed; }
+form { display: flex; gap: 8px; }
+#msg { flex: 1; min-width: 0; font: inherit; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+#send { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 999px; padding: 10px 18px; font-weight: 600; }
+#send:disabled { opacity: 0.5; cursor: default; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; display: flex; flex-direction: column; max-height: min(80vh, 780px); }
+@media (max-width: 900px) { .panel { max-height: none; } }
+.tabs { display: flex; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 11px 10px; font-size: 13.5px; font-weight: 500; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.pane { padding: 16px; overflow-y: auto; min-width: 0; }
+.pane h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.mem { display: grid; gap: 16px; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.order { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13.5px; display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.order .top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 12.5px; }
+.pill { font-family: var(--font-ui); font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink); }
+.pill.ready { background: var(--accent); color: var(--accent-ink); }
+.empty { color: var(--muted); font-size: 13.5px; }
+.hist { display: grid; gap: 4px; font-size: 13px; }
+.hist div { overflow-wrap: anywhere; }
+.hist b { font-weight: 600; }
+pre.prompt { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; }
+.tools { display: grid; gap: 10px; }
+.toolcard { border: 1px solid var(--tool-line); background: var(--tool-bg); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; font-size: 13.5px; }
+.toolcard code { font-family: var(--font-mono); color: var(--tool-ink); font-size: 13px; }
+.toolcard .io { font-size: 12.5px; color: var(--muted); }
+.toolcard .io span { color: var(--ink); font-family: var(--font-mono); font-size: 12px; }
+.note { font-size: 12.5px; color: var(--muted); margin: 0; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Kafe Sifariş Agenti</h1>
+      <p class="sub">Sifariş qəbul edir, vəziyyəti bildirir, büdcəyə uyğun tövsiyə verir. API-siz demo: bütün məntiq brauzerdə işləyir.</p>
+    </div>
+    <div class="head-actions">
+      <label class="toggle"><input type="checkbox" id="showTrace" checked> Agent dövrünü göstər</label>
+      <button class="btn-ghost" id="reset" type="button">Söhbəti sıfırla</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="chat" aria-label="Söhbət">
+      <div class="log" id="log" aria-live="polite"></div>
+      <div class="composer">
+        <div class="chips" id="chips"></div>
+        <form id="form">
+          <input id="msg" autocomplete="off" placeholder="Mesajınızı yazın… məs: 2 latte və 1 kruassan istəyirəm" aria-label="Mesaj">
+          <button id="send" type="submit">Göndər</button>
+        </form>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Agent paneli">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-tab="mem" id="tab-mem">Yaddaş</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="prompt" id="tab-prompt">Sistem promptu</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="tools" id="tab-tools">Alətlər</button>
+      </div>
+      <div class="pane" id="pane-mem"></div>
+      <div class="pane" id="pane-prompt" hidden><pre class="prompt" id="promptText"></pre></div>
+      <div class="pane" id="pane-tools" hidden><div class="tools" id="toolList"></div></div>
+    </aside>
+  </div>
+</div>
+
+<script>
+"use strict";
+// =====================================================================
+// 1. SİSTEM PROMPTU
+// =====================================================================
+const SYSTEM_PROMPT = `# ROL
+Sən "Kafe Sifariş Agenti"sən: kafenin rəqəmsal ofisiantı. Müştərilərlə Azərbaycan dilində nəzakətli, qısa və aydın danışırsan.
+
+# MƏQSƏD
+1. Sifariş qəbul etmək
+2. Sifarişin vəziyyətini bildirmək
+3. Müştəri büdcə deyəndə büdcəyə uyğun tövsiyə vermək
+
+# ALƏTLƏR VƏ NƏ VAXT İSTİFADƏ EDİLİR
+- get_menu(): menyu, qiymət və ya mövcudluq lazım olan hər halda. Menyu soruşulanda, sifarişdən əvvəl, büdcə tövsiyəsindən əvvəl və "kofe" kimi qeyri-müəyyən sözdə variantları göstərmək üçün.
+- place_order(items): yalnız müştəri sifariş xülasəsini "hə" ilə təsdiqlədikdən sonra.
+- order_status(order_id): müştəri sifarişin vəziyyətini soruşanda. Mövcud sifarişə əlavə etməzdən əvvəl sifarişin hələ hazır olmadığını yoxlamaq üçün.
+- add_to_order(order_id, items): "bayaqkı sifarişə ... əlavə et" deyiləndə, order_status sifarişin hazır olmadığını göstərdikdən və müştəri təsdiqlədikdən sonra.
+
+# İŞ QAYDASI (AGENT DÖVRÜ)
+- Aləti çağır, nəticəni oxu, nəticəyə görə ya cavab ver, ya da növbəti aləti çağır.
+- Sifariş ID-si deyilməyibsə, onu söhbət yaddaşından (son sifariş) götür.
+
+# YADDAŞ
+- Müştərinin adını, sifarişlərini, ID-ləri, təsdiq gözləyən sifarişi və son tövsiyələri yadda saxla.
+- "Bayaqkı sifariş", "əvvəlki sifarişi təkrarla", "2-ci variant" kimi istinadları yaddaşla həll et.
+
+# QADAĞALAR
+- Menyu, qiymət və ya mövcudluğu uydurma.
+- Mövcud olmayan yeməyi sifarişə əlavə etmə; eyni kateqoriyadan alternativ təklif et.
+- Təsdiqsiz place_order və ya add_to_order çağırma.
+- Büdcə tövsiyəsində ümumi məbləğ büdcəni keçməməlidir.
+- Hazır olmuş sifarişə əlavə etmə; yeni sifariş təklif et.
+
+# GUARDRAIL
+- Mövzudan kənar sual (siyasət, idman, kod, ev tapşırığı və s.): nəzakətlə rədd et və nə edə bildiyini de.
+- Qeyri-müəyyən sorğu ("kofe", "sifariş vermək istəyirəm", ID-siz status): təxmin etmə, dəqiqləşdirici sual ver.
+- Səlahiyyətindən kənar istək (təsdiqlənmiş sifarişi ləğv etmək): kassaya və ya ofisianta yönləndir.`;
+
+// =====================================================================
+// MƏLUMAT BAZASI (simulyasiya)
+// =====================================================================
+const MENU = {
+  "latte":         { ad: "Latte",         qiymet: 4.50, kateqoriya: "içki",       teqler: ["isti", "qəhvə", "vegetarian"], movcud: true },
+  "amerikano":     { ad: "Amerikano",     qiymet: 3.50, kateqoriya: "içki",       teqler: ["isti", "qəhvə", "vegetarian"], movcud: true },
+  "kapuçino":      { ad: "Kapuçino",      qiymet: 4.00, kateqoriya: "içki",       teqler: ["isti", "qəhvə", "vegetarian"], movcud: true },
+  "çay":           { ad: "Çay",           qiymet: 2.00, kateqoriya: "içki",       teqler: ["isti", "vegetarian"], movcud: true },
+  "limonad":       { ad: "Limonad",       qiymet: 3.00, kateqoriya: "içki",       teqler: ["soyuq", "vegetarian"], movcud: true },
+  "kruassan":      { ad: "Kruassan",      qiymet: 3.50, kateqoriya: "qəlyanaltı", teqler: ["vegetarian"], movcud: true },
+  "sendviç":       { ad: "Sendviç",       qiymet: 6.50, kateqoriya: "yemək",      teqler: [], movcud: true },
+  "toyuqlu salat": { ad: "Toyuqlu salat", qiymet: 7.00, kateqoriya: "yemək",      teqler: [], movcud: true },
+  "çizkeyk":       { ad: "Çizkeyk",       qiymet: 5.50, kateqoriya: "desert",     teqler: ["şirin", "vegetarian"], movcud: true },
+  "tiramisu":      { ad: "Tiramisu",      qiymet: 6.00, kateqoriya: "desert",     teqler: ["şirin", "qəhvə", "vegetarian"], movcud: false },
+  "brauni":        { ad: "Brauni",        qiymet: 4.00, kateqoriya: "desert",     teqler: ["şirin", "vegetarian"], movcud: true },
+};
+const ALIASES = {
+  "latte": "latte", "late": "latte",
+  "amerikano": "amerikano", "americano": "amerikano",
+  "kapuçino": "kapuçino", "kapucino": "kapuçino", "kapuçina": "kapuçino", "cappuccino": "kapuçino",
+  "çay": "çay", "cay": "çay",
+  "limonad": "limonad",
+  "kruassan": "kruassan", "kruasan": "kruassan", "croissant": "kruassan",
+  "sendviç": "sendviç", "sendvic": "sendviç", "sandviç": "sendviç",
+  "toyuqlu salat": "toyuqlu salat", "salat": "toyuqlu salat",
+  "çizkeyk": "çizkeyk", "cizkeyk": "çizkeyk", "cheesecake": "çizkeyk",
+  "tiramisu": "tiramisu",
+  "brauni": "brauni", "brownie": "brauni",
+};
+const GENERIC_COFFEE = ["kofe", "kofi", "coffee", "qəhvə"];
+
+let ORDERS = {};
+let NEXT_ID = 1001;
+const fmt = x => `${x.toFixed(2)} AZN`;
+const norm = s => s.replace(/İ/g, "i").replace(/I/g, "ı").toLowerCase().trim();
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// =====================================================================
+// 2. ALƏTLƏR (TOOLS)
+// =====================================================================
+function get_menu() {
+  return { ok: true, menyu: Object.entries(MENU).map(([id, v]) => ({ id, ...v })) };
+}
+function place_order({ items }) {
+  if (!items || !items.length) return { ok: false, xeta: "Sifariş boşdur" };
+  const lines = []; let total = 0;
+  for (const it of items) {
+    const m = MENU[it.name];
+    if (!m) return { ok: false, xeta: `'${it.name}' menyuda yoxdur` };
+    if (!m.movcud) return { ok: false, xeta: `${m.ad} hazırda mövcud deyil` };
+    const s = m.qiymet * it.quantity; total += s;
+    lines.push({ id: it.name, ad: m.ad, say: it.quantity, mebleg: +s.toFixed(2) });
+  }
+  const oid = `ORD-${NEXT_ID++}`;
+  ORDERS[oid] = { items: lines, cemi: +total.toFixed(2), yaradilib: Date.now() };
+  return { ok: true, order_id: oid, items: lines, cemi: +total.toFixed(2), hazirlanma_vaxti: "10-15 dəqiqə" };
+}
+function statusOf(oid) {
+  const sec = (Date.now() - ORDERS[oid].yaradilib) / 1000;
+  return sec < 30 ? "Qəbul edildi" : sec < 180 ? "Hazırlanır" : "Hazırdır";
+}
+function order_status({ order_id }) {
+  const oid = String(order_id).toUpperCase();
+  if (!ORDERS[oid]) return { ok: false, xeta: `${oid} nömrəli sifariş tapılmadı` };
+  return { ok: true, order_id: oid, status: statusOf(oid), items: ORDERS[oid].items, cemi: ORDERS[oid].cemi };
+}
+function add_to_order({ order_id, items }) {
+  const oid = String(order_id).toUpperCase();
+  const o = ORDERS[oid];
+  if (!o) return { ok: false, xeta: `${oid} nömrəli sifariş tapılmadı` };
+  if (statusOf(oid) === "Hazırdır") return { ok: false, xeta: `${oid} artıq hazırdır, ona əlavə etmək olmur` };
+  const added = [];
+  for (const it of items) {
+    const m = MENU[it.name];
+    if (!m || !m.movcud) return { ok: false, xeta: `'${it.name}' mövcud deyil` };
+    const price = m.qiymet * it.quantity;
+    const line = o.items.find(l => l.id === it.name);
+    if (line) { line.say += it.quantity; line.mebleg = +(line.mebleg + price).toFixed(2); }
+    else o.items.push({ id: it.name, ad: m.ad, say: it.quantity, mebleg: +price.toFixed(2) });
+    o.cemi = +(o.cemi + price).toFixed(2);
+    added.push({ ad: m.ad, say: it.quantity, mebleg: +price.toFixed(2) });
+  }
+  return { ok: true, order_id: oid, elave_olunan: added, items: o.items, cemi: o.cemi };
+}
+
+const TOOLS = {
+  get_menu:     { fn: get_menu,     what: "Menyunu qaytarır: yeməklər, qiymətlər, mövcudluq.",
+                  input: "yoxdur", output: "menyu: [{id, ad, qiymet, kateqoriya, teqler, movcud}]" },
+  place_order:  { fn: place_order,  what: "Təsdiqlənmiş yeni sifarişi yaradır.",
+                  input: "items: [{name, quantity}]", output: "{order_id, items, cemi, hazirlanma_vaxti} və ya {xeta}" },
+  order_status: { fn: order_status, what: "Sifarişin vəziyyətini qaytarır (Qəbul edildi / Hazırlanır / Hazırdır).",
+                  input: "order_id", output: "{order_id, status, items, cemi} və ya {xeta}" },
+  add_to_order: { fn: add_to_order, what: "Hələ hazır olmayan sifarişə yemək əlavə edir.",
+                  input: "order_id, items: [{name, quantity}]", output: "{order_id, elave_olunan, items, cemi} və ya {xeta}" },
+};
+
+// =====================================================================
+// 3. YADDAŞ (MEMORY)
+// =====================================================================
+function newMemory() {
+  return { history: [], userName: null, orders: [], pending: null, pendingTarget: null,
+           awaiting: null, lastRecs: [], budget: null,
+           add(role, text) { this.history.push({ role, text, at: new Date().toLocaleTimeString("az-AZ") }); },
+           lastOrderId() { return this.orders.length ? this.orders[this.orders.length - 1].order_id : null; } };
+}
+let mem = newMemory();
+
+// =====================================================================
+// MƏTNİN TƏHLİLİ (Unicode-a uyğun söz sərhədləri)
+// =====================================================================
+const B = "(?<![\\p{L}\\p{N}_])";
+const W = "[\\p{L}\\p{N}_]*";
+const QTY_WORDS = { "bir": 1, "iki": 2, "üç": 3, "dörd": 4, "beş": 5, "altı": 6, "yeddi": 7, "səkkiz": 8, "doqquz": 9 };
+const QTY = "\\d+|" + Object.keys(QTY_WORDS).join("|");
+const UNIT = "(?:ədəd|dənə|stəkan|porsiya|fincan)?";
+const ALIAS_ALT = Object.keys(ALIASES).sort((a, b) => b.length - a.length).map(esc).join("|");
+const ITEM_RE = new RegExp(`(?:${B}(${QTY})\\s*${UNIT}\\s+)?${B}(${ALIAS_ALT})${W}`, "gu");
+const GEN_RE = new RegExp(`(?:${B}(${QTY})\\s*${UNIT}\\s+)?${B}(${GENERIC_COFFEE.join("|")})${W}`, "u");
+const YES = new Set(["hə", "he", "bəli", "beli", "təsdiq", "təsdiqləyirəm", "ok", "oldu", "razıyam", "düzdür", "yes"]);
+const NO = new Set(["yox", "ləğv", "imtina", "istəmirəm"]);
+
+const qtyOf = q => !q ? 1 : /^\d+$/.test(q) ? parseInt(q, 10) : (QTY_WORDS[q] || 1);
+function extractItems(t) {
+  const found = {};
+  for (const m of t.matchAll(ITEM_RE)) {
+    const key = ALIASES[m[2]];
+    found[key] = (found[key] || 0) + qtyOf(m[1]);
+  }
+  return found;
+}
+function extractGeneric(t) {
+  const m = t.match(GEN_RE);
+  return m ? { qty: qtyOf(m[1]) } : null;
+}
+const has = (t, words) => words.some(w => new RegExp(B + esc(w), "u").test(t));
+const tokens = t => new Set(t.match(/[\p{L}\p{N}_]+/gu) || []);
+const anyIn = (set, ref) => [...set].some(x => ref.has(x));
+const saysConfirm = tok => [...tok].some(x => x.startsWith("təsdiq"));
+const isYes = tok => anyIn(tok, YES) || saysConfirm(tok);
+
+// =====================================================================
+// 4. GUARDRAIL
+// =====================================================================
+const OFF_TOPIC = ["hava", "siyasət", "futbol", "idman", "matç", "python", "kod", "proqram", "riyaziyyat",
+  "tarix", "film", "musiqi", "mahnı", "prezident", "seçki", "bitcoin", "kripto", "ev tapşırığı", "şeir",
+  "oyun", "xəbər", "dərs", "maşın", "imtahan", "valyuta"];
+const CAFE_WORDS = ["salam", "sağ ol", "sağol", "təşəkkür", "adım", "menyu", "sifariş", "qiymət", "büdcə",
+  "manat", "azn", "tövsiyə", "məsləhət", "status", "vəziyyət", "hazır", "variant", "təkrar", "eyni", "əvvəl",
+  "bayaq", "yemək", "içki", "desert", "şirin", "isti", "soyuq", "vegetarian", "ord", "kafe", "acmış",
+  "susamış", "nə var", "ləğv", "əlavə", "istəyirəm", "istərdim", ...GENERIC_COFFEE];
+
+function guardrail(text) {
+  const t = norm(text);
+  const hasItems = Object.keys(extractItems(t)).length > 0 || !!extractGeneric(t);
+  const isCafe = hasItems || has(t, CAFE_WORDS) || (mem.pending && (isYes(tokens(t)) || anyIn(tokens(t), NO)));
+  if (has(t, OFF_TOPIC) && !hasItems && !has(t, ["sifariş", "menyu"]))
+    return { ok: false, reason: "mövzudan kənar açar söz aşkarlandı" };
+  if (!isCafe) return { ok: false, reason: "mesaj kafe ilə əlaqəli deyil" };
+  return { ok: true };
+}
+const GUARD_REPLY = "Bağışlayın, mən yalnız kafe ilə bağlı kömək edə bilərəm. Menyuya baxa, sifariş verə, sifarişinizin vəziyyətini öyrənə və ya büdcənizə uyğun tövsiyə ala bilərsiniz.";
+
+// =====================================================================
+// NİYYƏTİN TƏYİNİ
+// =====================================================================
+function detectIntent(text) {
+  const t = norm(text);
+  const tok = tokens(t);
+  const aw = mem.awaiting; mem.awaiting = null;   // dəqiqləşdirmə sualı yalnız növbəti mesaja aiddir
+
+  if (new RegExp(B + "adım" + W + "\\s+(nədir|nə idi|nəydi|nə)(?![\\p{L}])", "u").test(t) || t.includes("adımı"))
+    return { intent: "ask_name", data: {} };
+  const nm = t.match(new RegExp(B + "adım\\s+(\\p{L}+)", "u"));
+  if (nm) {
+    const n = nm[1];
+    const first = n[0] === "i" ? "İ" : n[0].toUpperCase();
+    return { intent: "set_name", data: { name: first + n.slice(1) } };
+  }
+
+  if (mem.pending && isYes(tok) && !anyIn(tok, NO)) return { intent: "confirm", data: {} };
+  if (mem.pending && anyIn(tok, NO)) return { intent: "cancel", data: {} };
+  if (!mem.pending && saysConfirm(tok)) return { intent: "nothing_to_confirm", data: {} };
+
+  // "Hansı kofe?" sualına cavab
+  if (aw) {
+    const items = extractItems(t);
+    const coffee = Object.keys(items).filter(k => MENU[k].teqler.includes("qəhvə"));
+    if (coffee.length) {
+      const merged = { ...aw.items };
+      for (const [k, q] of Object.entries(items)) merged[k] = (merged[k] || 0) + (coffee.includes(k) ? aw.qty : q);
+      return { intent: aw.mode, data: { items: merged, generic: null, resolved: true } };
+    }
+  }
+
+  const vm = t.match(new RegExp(B + "(\\d+|birinci|ikinci|üçüncü)\\s*-?\\s*(?:ci|cı|cu|cü)?\\s*variant", "u"));
+  if (vm) return { intent: "choose_variant", data: { index: ({ birinci: 1, ikinci: 2, "üçüncü": 3 })[vm[1]] || parseInt(vm[1], 10) } };
+
+  if (has(t, ["əlavə"])) return { intent: "add_to_order", data: { items: extractItems(t), generic: extractGeneric(t) } };
+  if (/(təkrarla|təkrar et|eyni sifariş|eynisini|yenə eyni)/u.test(t)) return { intent: "repeat_order", data: {} };
+  if (/(nə sifariş et|əvvəlki sifariş|keçən sifariş|tarixçə|sifarişlərim)/u.test(t)) return { intent: "recall", data: {} };
+  if (has(t, ["ləğv"])) return { intent: "cancel_order", data: {} };
+
+  const idm = t.match(new RegExp(B + "ord-?(\\d+)", "u"));
+  if (idm || /(status|vəziyyət|hazırdır|hazır|hardadır|harada|nə vaxt)/u.test(t))
+    return { intent: "status", data: { order_id: idm ? `ORD-${idm[1]}` : null } };
+
+  const bm = t.match(/(\d+(?:[.,]\d+)?)\s*(?:manat|azn|₼)/u) || t.match(/büdcə\p{L}*\D*?(\d+(?:[.,]\d+)?)/u);
+  if (bm) {
+    const prefs = new Set();
+    if (has(t, ["şirin", "desert"])) prefs.add("şirin");
+    if (has(t, ["vegetarian", "vegan", "ətsiz"])) prefs.add("vegetarian");
+    if (has(t, ["isti"])) prefs.add("isti");
+    if (has(t, ["soyuq", "sərin"])) prefs.add("soyuq");
+    if (has(t, ["qəhvə", "kofe"])) prefs.add("qəhvə");
+    return { intent: "budget", data: { budget: parseFloat(bm[1].replace(",", ".")), prefs } };
+  }
+
+  const items = extractItems(t), generic = extractGeneric(t);
+  if (Object.keys(items).length || generic) return { intent: "order", data: { items, generic } };
+  if (has(t, ["menyu", "nə var", "qiymət"])) return { intent: "menu", data: {} };
+  if (has(t, ["sifariş", "istəyirəm", "istərdim", "acmış", "susamış"])) {
+    // "Pizza istəyirəm": menyuda olmayan konkret məhsul adı
+    const STOP = new Set(["sifariş", "sifarişi", "nəsə", "şey", "yemək", "içki", "bir", "nə", "vermək", "etmək", "almaq", "mən", "də", "da"]);
+    const um = t.match(/(\p{L}+)\s+(?:istəyirəm|istərdim)(?!\p{L})/u);
+    return { intent: "order_unclear", data: { unknown: um && !STOP.has(um[1]) ? um[1] : null } };
+  }
+  if (has(t, ["salam", "sağ ol", "sağol", "təşəkkür"]) || anyIn(tok, YES)) return { intent: "smalltalk", data: {} };
+  return { intent: "unknown", data: {} };
+}
+
+// =====================================================================
+// CAVAB FORMATLAYICILARI
+// =====================================================================
+const azUpper = s => s.replace(/i/g, "İ").replace(/ı/g, "I").toUpperCase();
+function formatMenu(menu) {
+  const groups = {};
+  for (const m of menu.menyu) (groups[m.kateqoriya] ||= []).push(m);
+  const out = ["Bu günün menyusu:"];
+  for (const [cat, list] of Object.entries(groups)) {
+    out.push("", azUpper(cat));
+    for (const m of list) out.push(`  • ${m.ad} — ${fmt(m.qiymet)}${m.movcud ? "" : "  (bitib)"}`);
+  }
+  out.push("", "Nə sifariş etmək istəyirsiniz?");
+  return out.join("\n");
+}
+function formatSummary(pending, target = null, baseTotal = 0) {
+  const out = [target ? `${target} sifarişinə əlavə olunacaq:` : "Sifarişinizin xülasəsi:"];
+  let total = 0;
+  for (const it of pending) {
+    const p = MENU[it.name].qiymet * it.quantity; total += p;
+    out.push(`  • ${it.quantity} × ${MENU[it.name].ad} — ${fmt(p)}`);
+  }
+  out.push(target ? `  Əlavə: ${fmt(total)}  |  Yeni cəmi: ${fmt(baseTotal + total)}` : `  Cəmi: ${fmt(total)}`);
+  out.push("Təsdiq edirsiniz? (hə / yox)");
+  return out.join("\n");
+}
+const toList = items => Object.entries(items).map(([name, quantity]) => ({ name, quantity }));
+function mergeLists(a, b) {
+  const m = {};
+  for (const it of [...a, ...b]) m[it.name] = (m[it.name] || 0) + it.quantity;
+  return toList(m);
+}
+function askCoffee(menu, qty) {
+  const opts = menu.menyu.filter(m => m.teqler.includes("qəhvə") && m.movcud && m.kateqoriya === "içki");
+  return [`Hansı kofeni istəyirsiniz${qty > 1 ? ` (${qty} ədəd)` : ""}?`,
+    ...opts.map(m => `  • ${m.ad} — ${fmt(m.qiymet)}`),
+    "Adını yazın, məsələn: “latte”."].join("\n");
+}
+function recommend(menu, budget, prefs) {
+  const avail = menu.menyu.filter(m => m.movcud);
+  const ok = c => {
+    if (prefs.has("vegetarian") && !c.every(m => m.teqler.includes("vegetarian"))) return false;
+    for (const tag of ["şirin", "isti", "soyuq", "qəhvə"])
+      if (prefs.has(tag) && !c.some(m => m.teqler.includes(tag))) return false;
+    return true;
+  };
+  const combos = [];
+  const n = avail.length;
+  for (let i = 0; i < n; i++) {
+    const c1 = [avail[i]]; combos.push(c1);
+    for (let j = i + 1; j < n; j++) {
+      const c2 = [avail[i], avail[j]]; combos.push(c2);
+      for (let k = j + 1; k < n; k++) combos.push([avail[i], avail[j], avail[k]]);
+    }
+  }
+  const scored = combos.map(c => ({ c, total: c.reduce((s, m) => s + m.qiymet, 0) }))
+    .filter(x => x.total <= budget + 1e-9 && ok(x.c))
+    .sort((a, b) => (new Set(b.c.map(m => m.kateqoriya)).size - new Set(a.c.map(m => m.kateqoriya)).size) || ((budget - a.total) - (budget - b.total)));
+  const picked = [], usedFirst = new Set();
+  for (const x of scored) {
+    if (usedFirst.has(x.c[0].id)) continue;
+    usedFirst.add(x.c[0].id); picked.push(x);
+    if (picked.length === 3) break;
+  }
+  return picked;
+}
+
+// =====================================================================
+// AGENTİN "BEYNİ": hər addımda ya alət çağırır, ya da yekun cavab verir
+// =====================================================================
+const lastResult = (scratch, tool) => { for (let i = scratch.length - 1; i >= 0; i--) if (scratch[i].tool === tool) return scratch[i].result; return null; };
+const T = (thought, name, args) => ({ type: "tool", thought, name, args });
+const F = (thought, content) => ({ type: "final", thought, content });
+
+function missingReply(items, menu) {
+  const byId = Object.fromEntries(menu.menyu.map(m => [m.id, m]));
+  const miss = Object.keys(items).filter(k => !byId[k].movcud);
+  if (!miss.length) return null;
+  const cats = new Set(miss.map(k => byId[k].kateqoriya));
+  const alts = menu.menyu.filter(m => m.movcud && cats.has(m.kateqoriya)).map(m => `${m.ad} (${fmt(m.qiymet)})`);
+  const names = miss.map(k => byId[k].ad).join(", ");
+  return F(`Alətin nəticəsinə görə ${names} mövcud deyil. Alternativ təklif edirəm.`,
+    `Təəssüf ki, ${names} hazırda bitib. Əvəzində bunları təklif edə bilərəm: ${alts.join(", ")}.`);
+}
+
+function nextAction(intent, data, scratch) {
+  const menu = lastResult(scratch, "get_menu");
+  const hi = mem.userName ? `, ${mem.userName}` : "";
+
+  if (intent === "menu") {
+    if (!menu) return T("Menyunu göstərmək üçün real məlumat lazımdır.", "get_menu", {});
+    return F("Alətdən menyu gəldi, formatlayıb göstərirəm.", formatMenu(menu));
+  }
+
+  if (intent === "order_unclear") {
+    if (!menu) return T(data.unknown
+      ? `“${data.unknown}” menyuda varmı, yoxlayıram.`
+      : "Müştəri nə istədiyini dəqiq demədi. Təklif etmək üçün menyunu alıram.", "get_menu", {});
+    if (data.unknown) {
+      const alts = menu.menyu.filter(m => m.movcud && (m.kateqoriya === "yemək" || m.kateqoriya === "qəlyanaltı"))
+        .map(m => `${m.ad} (${fmt(m.qiymet)})`).join(", ");
+      return F(`Alətin nəticəsində “${data.unknown}” yoxdur. Uydurmuram, rədd edib alternativ təklif edirəm.`,
+        `Təəssüf ki, “${data.unknown}” menyumuzda yoxdur. Əvəzində bunları təklif edə bilərəm: ${alts}.\nTam menyu üçün “menyunu göstər” yazın.`);
+    }
+    const names = menu.menyu.filter(m => m.movcud).map(m => m.ad).join(", ");
+    return F("Sorğu qeyri-müəyyəndir. Təxmin etmirəm, dəqiqləşdirici sual verirəm.",
+      `Nə sifariş etmək istəyirsiniz? Hazırda bunlar var: ${names}.\nMəsələn: “2 latte və 1 kruassan”.`);
+  }
+
+  if (intent === "repeat_order") {
+    if (!mem.orders.length) return F("Yaddaşda sifariş yoxdur.", "Hələ heç bir sifarişiniz olmayıb, təkrarlamağa bir şey yoxdur.");
+    const lastO = mem.orders[mem.orders.length - 1];
+    data.items = Object.fromEntries(lastO.items.map(l => [l.id, l.say]));
+    data.generic = null;
+    intent = "order";
+  }
+
+  if (intent === "order") {
+    if (!menu) return T("Sifarişdən əvvəl mövcudluğu yoxlamalıyam.", "get_menu", {});
+    const miss = missingReply(data.items, menu); if (miss) return miss;
+    if (data.generic) {
+      mem.awaiting = { mode: "order", items: data.items, qty: data.generic.qty };
+      return F("“Kofe” qeyri-müəyyəndir, menyuda bir neçə növ var. Təxmin etmirəm, soruşuram.", askCoffee(menu, data.generic.qty));
+    }
+    mem.pending = toList(data.items); mem.pendingTarget = null;
+    return F("Hamısı mövcuddur. Təsdiq almadan place_order çağırmıram.", formatSummary(mem.pending));
+  }
+
+  if (intent === "add_to_order") {
+    if (!Object.keys(data.items).length && !data.generic)
+      return F("Nə əlavə ediləcəyi bəlli deyil.", "Nə əlavə etmək istəyirsiniz? Məsələn: “bir çay da əlavə et”.");
+    if (!menu) return T("Əlavə ediləcək yeməyin mövcudluğunu yoxlayıram.", "get_menu", {});
+    const miss = missingReply(data.items, menu); if (miss) return miss;
+    if (data.generic) {
+      mem.awaiting = { mode: "add_to_order", items: data.items, qty: data.generic.qty };
+      return F("“Kofe” qeyri-müəyyəndir. Əlavə etməzdən əvvəl hansı növ olduğunu soruşuram.", askCoffee(menu, data.generic.qty));
+    }
+    const fresh = toList(data.items);
+    if (mem.pending && !mem.pendingTarget) {
+      mem.pending = mergeLists(mem.pending, fresh);
+      return F("Təsdiq gözləyən sifariş var, yeni yeməyi ona birləşdirirəm.", formatSummary(mem.pending));
+    }
+    const oid = mem.lastOrderId();
+    if (!oid) {
+      mem.pending = fresh; mem.pendingTarget = null;
+      return F("Yaddaşda əvvəlki sifariş yoxdur, yeni sifariş kimi qəbul edirəm.",
+        "Əvvəlki sifarişiniz yoxdur, bunu yeni sifariş kimi qəbul edirəm.\n" + formatSummary(fresh));
+    }
+    const st = lastResult(scratch, "order_status");
+    if (!st) return T(`“Bayaqkı sifariş” yaddaşdan götürüldü: ${oid}. Hələ dəyişmək olarmı, yoxlayıram.`, "order_status", { order_id: oid });
+    if (st.status === "Hazırdır") {
+      mem.pending = fresh; mem.pendingTarget = null;
+      return F(`${oid} artıq hazırdır, ona əlavə etmək olmaz. Yeni sifariş təklif edirəm.`,
+        `${oid} artıq hazırdır, ona əlavə etmək mümkün deyil. Ayrıca yeni sifariş kimi verək?\n` + formatSummary(fresh));
+    }
+    mem.pending = fresh; mem.pendingTarget = oid;
+    return F(`${oid} vəziyyəti “${st.status}”, əlavə etmək olar. Əvvəlcə təsdiq alıram.`, formatSummary(fresh, oid, st.cemi));
+  }
+
+  if (intent === "confirm" && mem.pendingTarget) {
+    const target = mem.pendingTarget;
+    const res = lastResult(scratch, "add_to_order");
+    if (!res) return T(`Müştəri təsdiqlədi, ${target} sifarişinə əlavə edirəm.`, "add_to_order", { order_id: target, items: mem.pending });
+    mem.pending = null; mem.pendingTarget = null;
+    if (!res.ok) return F("Alət xəta qaytardı.", `Əlavə etmək alınmadı: ${res.xeta}.`);
+    mem.orders = mem.orders.map(o => o.order_id === res.order_id ? { ...o, items: res.items, cemi: res.cemi } : o);
+    const added = res.elave_olunan.map(a => `${a.say} × ${a.ad}`).join(", ");
+    const all = res.items.map(l => `${l.say} × ${l.ad}`).join(", ");
+    return F("Əlavə uğurlu oldu, yenilənmiş sifarişi bildirirəm.",
+      `Oldu${hi}! ${added} ${res.order_id} sifarişinə əlavə edildi.\n  Yenilənmiş sifariş: ${all}\n  Yeni cəmi: ${fmt(res.cemi)}`);
+  }
+
+  if (intent === "confirm") {
+    const res = lastResult(scratch, "place_order");
+    if (!res) return T("Müştəri təsdiqlədi, sifarişi yaradıram.", "place_order", { items: mem.pending });
+    if (!res.ok) return F("Alət xəta qaytardı.", `Sifariş yaradılmadı: ${res.xeta}.`);
+    mem.orders.push(res); mem.pending = null;
+    return F("Sifariş uğurla yaradıldı, ID-ni bildirirəm.",
+      `Sifarişiniz qəbul edildi${hi}!\n  Sifariş ID: ${res.order_id}\n  Cəmi: ${fmt(res.cemi)}\n  Hazırlanma vaxtı: ${res.hazirlanma_vaxti}`);
+  }
+
+  if (intent === "cancel") {
+    mem.pending = null; mem.pendingTarget = null;
+    return F("Müştəri imtina etdi, gözləyən sifarişi silirəm.", "Sifariş ləğv edildi. Başqa bir şey istəyirsiniz?");
+  }
+
+  if (intent === "nothing_to_confirm")
+    return F("Təsdiq gözləyən sifariş yoxdur.", "Hazırda təsdiq gözləyən sifariş yoxdur. Nə sifariş etmək istəyirsiniz?");
+
+  if (intent === "cancel_order") {
+    const oid = mem.lastOrderId();
+    if (!oid) return F("Ləğv ediləcək sifariş yoxdur.", "Hazırda ləğv ediləcək sifarişiniz yoxdur.");
+    return F("Təsdiqlənmiş sifarişi ləğv etmək üçün alətim yoxdur. Müştərini yönləndirirəm.",
+      `Qəbul olunmuş sifarişi (${oid}) ləğv etmək üçün kassaya yaxınlaşın və ya ofisianta deyin. Mən yeni sifariş qəbul edə və vəziyyəti yoxlaya bilərəm.`);
+  }
+
+  if (intent === "status") {
+    const oid = data.order_id || mem.lastOrderId();
+    if (!oid) return F("Mesajda ID yoxdur, yaddaşda da sifariş yoxdur. Soruşuram.", "Sifariş ID-nizi deyə bilərsiniz? (məs: ORD-1001)");
+    const res = lastResult(scratch, "order_status");
+    if (!res) return T(`Sifariş ID ${data.order_id ? "mesajdan" : "yaddaşdan"} götürüldü: ${oid}.`, "order_status", { order_id: oid });
+    if (!res.ok) return F("Sifariş tapılmadı.", `${res.xeta}. ID-ni yoxlaya bilərsiniz?`);
+    const items = res.items.map(l => `${l.say} × ${l.ad}`).join(", ");
+    return F("Status alındı, müştəriyə bildirirəm.", `${res.order_id} (${items}): ${res.status}.`);
+  }
+
+  if (intent === "budget") {
+    mem.budget = data.budget;
+    if (!menu) return T(`Büdcə ${fmt(data.budget)}. Tövsiyə üçün menyu lazımdır.`, "get_menu", {});
+    const recs = recommend(menu, data.budget, data.prefs);
+    mem.lastRecs = recs;
+    if (!recs.length) {
+      const cheapest = menu.menyu.filter(m => m.movcud).sort((a, b) => a.qiymet - b.qiymet)[0];
+      return F("Büdcəyə uyğun kombinasiya yoxdur.", `Təəssüf ki, bu büdcəyə uyğun variant tapmadım. Ən ucuz seçim: ${cheapest.ad} (${fmt(cheapest.qiymet)}).`);
+    }
+    const pref = data.prefs.size ? ` (${[...data.prefs].join(", ")})` : "";
+    const out = [`${fmt(data.budget)} büdcəyə uyğun variantlar${pref}:`];
+    recs.forEach((x, i) => out.push(`  ${i + 1}. ${x.c.map(m => `${m.ad} (${m.qiymet.toFixed(2)})`).join(" + ")} = ${fmt(x.total)}  (qalır: ${fmt(data.budget - x.total)})`));
+    out.push("Hansı variantı seçirsiniz? (məs: “2-ci variant”)");
+    return F(`Menyudan ${recs.length} uyğun kombinasiya hesabladım, heç biri büdcəni keçmir.`, out.join("\n"));
+  }
+
+  if (intent === "choose_variant") {
+    if (!mem.lastRecs.length) return F("Yaddaşda tövsiyə yoxdur.", "Əvvəlcə büdcənizi deyin, sonra variant seçə bilərsiniz.");
+    const i = data.index;
+    if (i < 1 || i > mem.lastRecs.length) return F("Yanlış variant nömrəsi.", `1 ilə ${mem.lastRecs.length} arasında variant seçin.`);
+    mem.pending = mem.lastRecs[i - 1].c.map(m => ({ name: m.id, quantity: 1 })); mem.pendingTarget = null;
+    return F(`Yaddaşdakı ${i}-ci tövsiyəni sifarişə çevirirəm.`, formatSummary(mem.pending));
+  }
+
+  if (intent === "recall") {
+    if (!mem.orders.length) return F("Yaddaşda sifariş yoxdur.", "Bu söhbətdə hələ sifariş verməmisiniz.");
+    const out = ["Yaddaşıma görə bu söhbətdəki sifarişləriniz:"];
+    for (const o of mem.orders) out.push(`  • ${o.order_id}: ${o.items.map(l => `${l.say} × ${l.ad}`).join(", ")} (${fmt(o.cemi)})`);
+    out.push("Eyni sifarişi təkrarlamaq istəsəniz, “təkrarla” yazın.");
+    return F("Cavabı yaddaşdan verirəm, alət lazım deyil.", out.join("\n"));
+  }
+
+  if (intent === "set_name") {
+    mem.userName = data.name;
+    return F("Adı yaddaşa yazıram.", `Xoş gəldiniz, ${mem.userName}! Menyuya baxmaq, sifariş vermək və ya büdcənizə uyğun tövsiyə almaq istəyirsiniz?`);
+  }
+  if (intent === "ask_name")
+    return mem.userName ? F("Ad yaddaşda var.", `Adınız ${mem.userName}.`) : F("Ad yaddaşda yoxdur.", "Hələ adınızı deməmisiniz.");
+
+  if (intent === "smalltalk") return F("Salamlaşma və ya təşəkkür.", `Buyurun${hi}! Sizə necə kömək edə bilərəm?`);
+
+  return F("Niyyət aydın deyil. Nümunələrlə yönləndirirəm.",
+    "Bağışlayın, tam başa düşmədim. Məsələn: “menyunu göstər”, “2 latte istəyirəm”, “10 manatım var” və ya “sifarişim hazırdır?”");
+}
+
+// =====================================================================
+// 5. AGENT DÖVRÜ + İNTERFEYS
+// =====================================================================
+const $ = id => document.getElementById(id);
+const log = $("log"), input = $("msg"), sendBtn = $("send");
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const MAX_STEPS = 5;
+let busy = false;
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function scrollDown() { log.scrollTop = log.scrollHeight; }
+function addMsg(role, text) {
+  const m = el("div", `msg ${role}`);
+  m.append(el("span", "who", role === "user" ? (mem.userName || "Siz") : "Agent"), document.createTextNode(text));
+  log.append(m); scrollDown();
+}
+function addTrace() {
+  const t = el("div", "trace"); t.hidden = !$("showTrace").checked;
+  t.append(el("div", "t-title", "Agent dövrü"));
+  log.append(t); scrollDown(); return t;
+}
+function traceLine(t, text, cls = "line") { t.append(el("div", cls, text)); scrollDown(); }
+function summarize(name, r) {
+  if (!r.ok) return `xəta: ${r.xeta}`;
+  if (name === "get_menu") return `${r.menyu.length} məhsul, ${r.menyu.filter(m => m.movcud).length} mövcud`;
+  if (name === "place_order") return `${r.order_id} yaradıldı, cəmi ${fmt(r.cemi)}`;
+  if (name === "order_status") return `${r.order_id}: ${r.status}`;
+  if (name === "add_to_order") return `${r.order_id} yeniləndi, yeni cəmi ${fmt(r.cemi)}`;
+  return "ok";
+}
+function callTool(name, args, t) {
+  const argTxt = Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+  const box = el("div", "tool");
+  box.append(el("div", null, `🔧 ${name}(${argTxt}) çağırıldı`));
+  const result = TOOLS[name].fn(args);
+  box.append(el("div", null, `📤 Nəticə: ${summarize(name, result)}`));
+  const d = el("details"); d.append(el("summary", null, "tam JSON"), el("pre", null, JSON.stringify(result, null, 2)));
+  box.append(d);
+  t.append(box); scrollDown();
+  return result;
+}
+
+async function handle(text) {
+  busy = true; sendBtn.disabled = true;
+  addMsg("user", text);
+  const t = addTrace();
+  const g = guardrail(text);
+  let reply;
+  if (!g.ok) {
+    traceLine(t, `🛡️ Guardrail: sorğu rədd edildi (${g.reason})`, "guard");
+    reply = GUARD_REPLY;
+  } else {
+    traceLine(t, "🛡️ Guardrail: keçdi");
+    const { intent, data } = detectIntent(text);
+    traceLine(t, `🎯 Niyyət: ${intent}`);
+    const scratch = [];
+    for (let step = 1; step <= MAX_STEPS; step++) {
+      if (!reduced) await sleep(380);
+      const a = nextAction(intent, data, scratch);
+      traceLine(t, `Addım ${step} · 🧠 ${a.thought}`, "line step");
+      if (a.type === "tool") {
+        if (!reduced) await sleep(260);
+        const result = callTool(a.name, a.args, t);
+        scratch.push({ tool: a.name, args: a.args, result });
+        continue;
+      }
+      reply = a.content; break;
+    }
+    if (!reply) reply = "Bağışlayın, sorğunu tamamlaya bilmədim. Yenidən cəhd edin.";
+  }
+  if (!reduced) await sleep(200);
+  addMsg("agent", reply);
+  mem.add("user", text); mem.add("agent", reply);
+  renderMemory();
+  busy = false; sendBtn.disabled = false; input.focus();
+}
+
+// ---------- Yaddaş paneli ----------
+function renderMemory() {
+  const p = $("pane-mem"); p.textContent = "";
+  const wrap = el("div", "mem");
+
+  const s1 = el("section"); s1.append(el("h3", null, "Müştəri"));
+  const kv = el("dl", "kv");
+  const pendingTxt = mem.pending ? mem.pending.map(i => `${i.quantity} × ${MENU[i.name].ad}`).join(", ") + (mem.pendingTarget ? ` → ${mem.pendingTarget}` : "") : "yoxdur";
+  [["Ad", mem.userName || "deyilməyib"], ["Təsdiq gözləyən", pendingTxt],
+   ["Dəqiqləşdirmə", mem.awaiting ? "Hansı kofe? (cavab gözlənilir)" : "yoxdur"],
+   ["Son büdcə", mem.budget != null ? fmt(mem.budget) : "yoxdur"],
+   ["Tövsiyələr", mem.lastRecs.length ? `${mem.lastRecs.length} variant yaddaşda` : "yoxdur"]]
+    .forEach(([k, v]) => { kv.append(el("dt", null, k), el("dd", null, v)); });
+  s1.append(kv); wrap.append(s1);
+
+  const s2 = el("section"); s2.append(el("h3", null, "Sifarişlər"));
+  if (!mem.orders.length) s2.append(el("div", "empty", "Hələ sifariş yoxdur. İlk sifariş təsdiqlənəndən sonra burada görünəcək."));
+  else {
+    const list = el("div"); list.style.display = "grid"; list.style.gap = "8px";
+    for (const o of mem.orders) {
+      const st = ORDERS[o.order_id] ? statusOf(o.order_id) : "";
+      const card = el("div", "order");
+      const top = el("div", "top"); top.append(el("span", null, o.order_id), el("span", `pill${st === "Hazırdır" ? " ready" : ""}`, st));
+      card.append(top, el("div", null, o.items.map(l => `${l.say} × ${l.ad}`).join(", ")), el("div", null, `Cəmi: ${fmt(o.cemi)}`));
+      list.append(card);
+    }
+    s2.append(list);
+  }
+  wrap.append(s2);
+
+  const s3 = el("section"); s3.append(el("h3", null, `Söhbət tarixçəsi (${mem.history.length} mesaj)`));
+  if (!mem.history.length) s3.append(el("div", "empty", "Mesajlar burada saxlanılır; agent onlara istinad edir."));
+  else {
+    const h = el("div", "hist");
+    for (const m of mem.history.slice(-6)) {
+      const row = el("div"); row.append(el("b", null, m.role === "user" ? "Siz: " : "Agent: "), document.createTextNode(m.text.split("\n")[0].slice(0, 90)));
+      h.append(row);
+    }
+    s3.append(h);
+  }
+  wrap.append(s3);
+  wrap.append(el("p", "note", "Sifariş statusu vaxta görə dəyişir: ilk 30 saniyə “Qəbul edildi”, 3 dəqiqəyədək “Hazırlanır”, sonra “Hazırdır”."));
+  p.append(wrap);
+}
+
+// ---------- Sistem promptu və alətlər ----------
+$("promptText").textContent = SYSTEM_PROMPT;
+for (const [name, t] of Object.entries(TOOLS)) {
+  const c = el("div", "toolcard");
+  c.append(el("code", null, name), el("div", null, t.what));
+  const i = el("div", "io"); i.append(document.createTextNode("Giriş: "), el("span", null, t.input));
+  const o = el("div", "io"); o.append(document.createTextNode("Çıxış: "), el("span", null, t.output));
+  c.append(i, o); $("toolList").append(c);
+}
+
+// ---------- Tablar ----------
+document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
+  ["mem", "prompt", "tools"].forEach(k => { $("pane-" + k).hidden = btn.dataset.tab !== k; });
+  if (btn.dataset.tab === "mem") renderMemory();
+}));
+
+// ---------- Nümunə mesajlar ----------
+const SAMPLES = [
+  ["Salam, adım Aydan"], ["Menyunu göstər"], ["2 latte və 1 kruassan istəyirəm"], ["hə"],
+  ["Sifarişim hazırdır?"], ["Bayaqkı sifarişə bir kofe də əlavə et"], ["15 manatım var, şirin bir şey tövsiyə et"],
+  ["2-ci variant"], ["Bir tiramisu istəyirəm"], ["Əvvəl nə sifariş etmişdim?"], ["Futbolda kim qalib gəldi?", true],
+];
+for (const [s, off] of SAMPLES) {
+  const b = el("button", `chip${off ? " off" : ""}`, s); b.type = "button";
+  b.addEventListener("click", () => { if (!busy) handle(s); });
+  $("chips").append(b);
+}
+
+$("form").addEventListener("submit", e => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = ""; handle(text);
+});
+$("showTrace").addEventListener("change", e => document.querySelectorAll(".trace").forEach(t => { t.hidden = !e.target.checked; }));
+
+function greet() {
+  addMsg("agent", "Salam! Mən Kafe Sifariş Agentiyəm. Sifariş qəbul edirəm, sifarişin vəziyyətini bildirirəm və büdcənizə uyğun tövsiyə verirəm.\nAşağıdakı nümunələrdən birinə toxunun və ya öz mesajınızı yazın.");
+}
+$("reset").addEventListener("click", () => {
+  if (busy) return;
+  mem = newMemory(); ORDERS = {}; NEXT_ID = 1001;
+  log.textContent = ""; greet(); renderMemory();
+});
+setInterval(() => { if (!$("pane-mem").hidden && mem.orders.length) renderMemory(); }, 5000);
+
+greet();
+renderMemory();
+</script>
+
+</body>
+</html>
